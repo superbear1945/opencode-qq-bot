@@ -86,12 +86,19 @@ export async function promptAsync(client: OpencodeClient, params: PromptParams):
 }
 
 export async function listProviderModels(client: OpencodeClient): Promise<AdapterModel[]> {
-  const result = await client.provider.list()
-  // Prefer the dedicated provider API first because newer OpenCode
-  // versions normalize provider metadata there.
-  const models = collectProviderModels(result)
-  if (models.length > 0) {
-    return models
+  try {
+    const result = await client.provider.list()
+    // 优先使用专门的 provider API。较新的 OpenCode 版本通常会在这里
+    // 提供更标准化的 provider / model 元数据。
+    const models = collectProviderModels(result)
+    if (models.length > 0) {
+      return models
+    }
+  } catch {
+    // 一些旧版 OpenCode / server 组合根本不暴露 `/provider`，
+    // 或者 SDK 在调用这里时会直接抛错。这里故意继续往下走
+    // `config.providers()` 的兜底逻辑，保证不同版本混用时 `/model`
+    // 仍然尽量可用。
   }
 
   const configApi = getProperty(client, "config")
@@ -100,9 +107,9 @@ export async function listProviderModels(client: OpencodeClient): Promise<Adapte
     return []
   }
 
-  // Fallback for older SDK/server combinations where provider.list()
-  // is absent, incomplete, or wrapped differently but config.providers()
-  // still exposes the data needed by `/model`.
+  // 兜底兼容旧版 SDK / server：当 `provider.list()` 不存在、
+  // 返回不完整，或者返回结构与当前预期不一致时，仍然尝试从
+  // `config.providers()` 中提取 `/model` 需要的数据。
   return collectProviderModels(await Promise.resolve(providersFn.call(configApi)))
 }
 
@@ -127,12 +134,11 @@ function collectProviderModels(response: unknown): AdapterModel[] {
 
 function extractProviders(response: unknown): Record<string, unknown>[] {
   const data = getProperty(response, "data") ?? response
-  // Different OpenCode/SDK versions expose providers in different slots:
-  // - provider.list() commonly returns data.all
-  // - config.providers() may expose data.providers
-  // - some wrappers may surface providers directly at the top level
-  // We check all known locations in priority order and use the first
-  // array-like value that matches.
+  // 不同 OpenCode / SDK 版本把 providers 放在不同位置：
+  // - provider.list() 常见于 data.all
+  // - config.providers() 可能暴露在 data.providers
+  // - 某些包装层可能直接把 providers 放在顶层
+  // 这里按优先顺序检查这些已知位置，拿到第一个可用数组即可。
   const candidates = [
     data,
     getProperty(data, "all"),
@@ -150,9 +156,9 @@ function extractProviders(response: unknown): Record<string, unknown>[] {
 }
 
 function extractModelEntries(models: unknown): Array<{ key?: string; value: unknown }> {
-  // Newer responses often expose models as an object map keyed by model id,
-  // while some older code paths still use arrays. Converting both forms into
-  // a single `{ key, value }` sequence keeps the parsing logic below simple.
+  // 新版响应经常把 models 表示为以 model id 为 key 的对象字典，
+  // 而旧代码路径里仍可能是数组。这里统一转换成 `{ key, value }`
+  // 序列，简化后续解析逻辑。
   if (Array.isArray(models)) {
     return models.map((value) => ({ value }))
   }

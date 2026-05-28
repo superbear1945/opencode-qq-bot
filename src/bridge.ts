@@ -150,10 +150,9 @@ function waitForSessionReply(
 ): Promise<string> {
   let settled = false
   let latestText = ""
-  // Newer OpenCode builds can stream assistant text as multiple
-  // `message.part.delta` events for the same logical text part.
-  // We keep the partial text keyed by partID so reviewers can see
-  // exactly how the final reply is reconstructed before `session.idle`.
+  // 新版 OpenCode 可能会把同一段文本拆成多条 `message.part.delta`
+  // 事件流式返回。这里按 partID 暂存片段内容，确保在 `session.idle`
+  // 到来前可以把完整回复重新拼出来。
   const textByPartId = new Map<string, string>()
 
   return new Promise<string>((resolve, reject) => {
@@ -173,15 +172,13 @@ function waitForSessionReply(
 
     router.unregister(sessionId)
     router.register(sessionId, (event: Event) => {
-      // Prefer delta handling first. On newer servers this is the only
-      // text event we receive, so without this branch the bot would reach
-      // `session.idle` with an empty `latestText` and reply with
-      // `(AI 未返回内容)` even though the model did generate output.
+      // 先处理 delta 事件。对较新的服务端来说，这可能是唯一的文本事件。
+      // 如果不先兼容这里，流程会在 `session.idle` 时因为 `latestText`
+      // 仍然为空而错误回复 `(AI 未返回内容)`。
       const deltaEvent = getMessagePartDelta(event)
       if (deltaEvent) {
-        // Delta events can be emitted for non-text fields as well.
-        // We only append text content here because that is what should
-        // be sent back to QQ as the assistant reply.
+        // delta 事件也可能用于非文本字段，这里只拼接文本内容，
+        // 因为最终发回 QQ 的只应该是助手生成的文本回复。
         if (deltaEvent.properties.field !== "text") {
           return
         }
@@ -195,8 +192,8 @@ function waitForSessionReply(
       if (event.type === "message.part.updated") {
         const part = event.properties.part
         if (part.type === "text") {
-          // Keep compatibility with older OpenCode versions that still
-          // emit the fully materialized text part instead of delta events.
+          // 保留对旧版 OpenCode 的兼容：旧版可能不会发送 delta，
+          // 而是直接通过完整的 text part 更新文本内容。
           textByPartId.set(part.id, part.text)
           latestText = Array.from(textByPartId.values()).join("\n\n")
         }
@@ -232,9 +229,8 @@ interface MessagePartDeltaEvent {
 }
 
 function getMessagePartDelta(event: unknown): MessagePartDeltaEvent | null {
-  // The SDK Event union in this project version does not model
-  // `message.part.delta`, so we narrow the shape manually instead of
-  // relying on a typed discriminated union.
+  // 当前项目依赖的 SDK 类型里还没有声明 `message.part.delta`，
+  // 所以这里改用运行时结构判断，而不是依赖现成的联合类型收窄。
   if (typeof event !== "object" || event === null) {
     return null
   }
