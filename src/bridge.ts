@@ -150,6 +150,10 @@ function waitForSessionReply(
 ): Promise<string> {
   let settled = false
   let latestText = ""
+  // Newer OpenCode builds can stream assistant text as multiple
+  // `message.part.delta` events for the same logical text part.
+  // We keep the partial text keyed by partID so reviewers can see
+  // exactly how the final reply is reconstructed before `session.idle`.
   const textByPartId = new Map<string, string>()
 
   return new Promise<string>((resolve, reject) => {
@@ -169,8 +173,15 @@ function waitForSessionReply(
 
     router.unregister(sessionId)
     router.register(sessionId, (event: Event) => {
+      // Prefer delta handling first. On newer servers this is the only
+      // text event we receive, so without this branch the bot would reach
+      // `session.idle` with an empty `latestText` and reply with
+      // `(AI 未返回内容)` even though the model did generate output.
       const deltaEvent = getMessagePartDelta(event)
       if (deltaEvent) {
+        // Delta events can be emitted for non-text fields as well.
+        // We only append text content here because that is what should
+        // be sent back to QQ as the assistant reply.
         if (deltaEvent.properties.field !== "text") {
           return
         }
@@ -184,6 +195,8 @@ function waitForSessionReply(
       if (event.type === "message.part.updated") {
         const part = event.properties.part
         if (part.type === "text") {
+          // Keep compatibility with older OpenCode versions that still
+          // emit the fully materialized text part instead of delta events.
           textByPartId.set(part.id, part.text)
           latestText = Array.from(textByPartId.values()).join("\n\n")
         }
@@ -219,6 +232,9 @@ interface MessagePartDeltaEvent {
 }
 
 function getMessagePartDelta(event: unknown): MessagePartDeltaEvent | null {
+  // The SDK Event union in this project version does not model
+  // `message.part.delta`, so we narrow the shape manually instead of
+  // relying on a typed discriminated union.
   if (typeof event !== "object" || event === null) {
     return null
   }

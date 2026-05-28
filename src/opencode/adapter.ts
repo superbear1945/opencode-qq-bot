@@ -87,6 +87,8 @@ export async function promptAsync(client: OpencodeClient, params: PromptParams):
 
 export async function listProviderModels(client: OpencodeClient): Promise<AdapterModel[]> {
   const result = await client.provider.list()
+  // Prefer the dedicated provider API first because newer OpenCode
+  // versions normalize provider metadata there.
   const models = collectProviderModels(result)
   if (models.length > 0) {
     return models
@@ -98,6 +100,9 @@ export async function listProviderModels(client: OpencodeClient): Promise<Adapte
     return []
   }
 
+  // Fallback for older SDK/server combinations where provider.list()
+  // is absent, incomplete, or wrapped differently but config.providers()
+  // still exposes the data needed by `/model`.
   return collectProviderModels(await Promise.resolve(providersFn.call(configApi)))
 }
 
@@ -122,6 +127,12 @@ function collectProviderModels(response: unknown): AdapterModel[] {
 
 function extractProviders(response: unknown): Record<string, unknown>[] {
   const data = getProperty(response, "data") ?? response
+  // Different OpenCode/SDK versions expose providers in different slots:
+  // - provider.list() commonly returns data.all
+  // - config.providers() may expose data.providers
+  // - some wrappers may surface providers directly at the top level
+  // We check all known locations in priority order and use the first
+  // array-like value that matches.
   const candidates = [
     data,
     getProperty(data, "all"),
@@ -139,6 +150,9 @@ function extractProviders(response: unknown): Record<string, unknown>[] {
 }
 
 function extractModelEntries(models: unknown): Array<{ key?: string; value: unknown }> {
+  // Newer responses often expose models as an object map keyed by model id,
+  // while some older code paths still use arrays. Converting both forms into
+  // a single `{ key, value }` sequence keeps the parsing logic below simple.
   if (Array.isArray(models)) {
     return models.map((value) => ({ value }))
   }

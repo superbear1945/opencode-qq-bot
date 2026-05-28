@@ -58,6 +58,9 @@ export class EventRouter {
   }
 
   private extractSessionId(event: Event): string | undefined {
+    // `message.part.delta` does not fit the older typed branches below,
+    // but it still carries `sessionID` in `properties`. We extract it first
+    // so newer streaming text events are routed to the correct listener.
     const deltaSessionId = extractDeltaSessionId(event)
     if (deltaSessionId) {
       return deltaSessionId
@@ -94,6 +97,8 @@ export class EventRouter {
 }
 
 function extractDeltaSessionId(event: Event): string | undefined {
+  // Keep this helper intentionally shape-based so it works even when the
+  // installed SDK types have not yet caught up with the runtime event set.
   const properties = (event as { properties?: unknown }).properties
   if (typeof properties !== "object" || properties === null) {
     return undefined
