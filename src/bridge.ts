@@ -150,6 +150,7 @@ function waitForSessionReply(
 ): Promise<string> {
   let settled = false
   let latestText = ""
+  const textByPartId = new Map<string, string>()
 
   return new Promise<string>((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -168,10 +169,23 @@ function waitForSessionReply(
 
     router.unregister(sessionId)
     router.register(sessionId, (event: Event) => {
+      const deltaEvent = getMessagePartDelta(event)
+      if (deltaEvent) {
+        if (deltaEvent.properties.field !== "text") {
+          return
+        }
+
+        const current = textByPartId.get(deltaEvent.properties.partID) ?? ""
+        textByPartId.set(deltaEvent.properties.partID, current + deltaEvent.properties.delta)
+        latestText = Array.from(textByPartId.values()).join("\n\n")
+        return
+      }
+
       if (event.type === "message.part.updated") {
         const part = event.properties.part
         if (part.type === "text") {
-          latestText = part.text
+          textByPartId.set(part.id, part.text)
+          latestText = Array.from(textByPartId.values()).join("\n\n")
         }
         return
       }
@@ -192,6 +206,49 @@ function waitForSessionReply(
       finish(() => reject(error instanceof Error ? error : new Error(String(error))))
     }
   })
+}
+
+interface MessagePartDeltaEvent {
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+function getMessagePartDelta(event: unknown): MessagePartDeltaEvent | null {
+  if (typeof event !== "object" || event === null) {
+    return null
+  }
+
+  if (Reflect.get(event, "type") !== "message.part.delta") {
+    return null
+  }
+
+  const properties = Reflect.get(event, "properties")
+  if (typeof properties !== "object" || properties === null) {
+    return null
+  }
+
+  const partID = Reflect.get(properties, "partID")
+  const field = Reflect.get(properties, "field")
+  const delta = Reflect.get(properties, "delta")
+  const sessionID = Reflect.get(properties, "sessionID")
+  if (typeof partID !== "string" || typeof field !== "string" || typeof delta !== "string") {
+    return null
+  }
+
+  return {
+    type: "message.part.delta",
+    properties: {
+      sessionID: typeof sessionID === "string" ? sessionID : "",
+      partID,
+      field,
+      delta,
+    },
+  }
 }
 
 function toErrorMessage(error: unknown): string {

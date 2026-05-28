@@ -58,6 +58,11 @@ export class EventRouter {
   }
 
   private extractSessionId(event: Event): string | undefined {
+    const deltaSessionId = extractDeltaSessionId(event)
+    if (deltaSessionId) {
+      return deltaSessionId
+    }
+
     switch (event.type) {
       case "message.part.updated":
         return event.properties.part.sessionID
@@ -86,4 +91,14 @@ export class EventRouter {
   resetBackoff(): void {
     this.reconnectDelay = 1000
   }
+}
+
+function extractDeltaSessionId(event: Event): string | undefined {
+  const properties = (event as { properties?: unknown }).properties
+  if (typeof properties !== "object" || properties === null) {
+    return undefined
+  }
+
+  const sessionId = Reflect.get(properties, "sessionID")
+  return typeof sessionId === "string" ? sessionId : undefined
 }

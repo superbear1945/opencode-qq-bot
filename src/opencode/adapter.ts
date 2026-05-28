@@ -87,29 +87,78 @@ export async function promptAsync(client: OpencodeClient, params: PromptParams):
 
 export async function listProviderModels(client: OpencodeClient): Promise<AdapterModel[]> {
   const result = await client.provider.list()
-  const data = (result.data ?? result) as unknown as Record<string, unknown>
-  const allProviders = Array.isArray(data.all) ? data.all as Record<string, unknown>[] : []
+  const models = collectProviderModels(result)
+  if (models.length > 0) {
+    return models
+  }
+
+  const configApi = getProperty(client, "config")
+  const providersFn = isRecord(configApi) ? Reflect.get(configApi, "providers") : undefined
+  if (typeof providersFn !== "function") {
+    return []
+  }
+
+  return collectProviderModels(await Promise.resolve(providersFn.call(configApi)))
+}
+
+function collectProviderModels(response: unknown): AdapterModel[] {
+  const providers = extractProviders(response)
   const models: AdapterModel[] = []
 
-  for (const provider of allProviders) {
-    const providerId = typeof provider.id === "string" ? provider.id : undefined
+  for (const provider of providers) {
+    const providerId = getString(provider, "id") ?? getString(provider, "providerID")
     if (!providerId) continue
 
-    const rawModels = provider.models
-    if (!rawModels || typeof rawModels !== "object") continue
-
-    const entries = Array.isArray(rawModels) ? rawModels : Object.values(rawModels)
-    for (const m of entries) {
-      if (!m || typeof m !== "object") continue
-      const rec = m as Record<string, unknown>
-      const modelId = typeof rec.id === "string" ? rec.id : undefined
+    for (const model of extractModelEntries(getProperty(provider, "models"))) {
+      const modelId = model.key ?? getString(model.value, "id") ?? getString(model.value, "modelID")
       if (!modelId) continue
-      const modelName = typeof rec.name === "string" ? rec.name : modelId
+      const modelName = getString(model.value, "name") ?? modelId
       models.push({ id: `${providerId}/${modelId}`, providerId, modelId, label: `${providerId} / ${modelName}` })
     }
   }
 
   return models
+}
+
+function extractProviders(response: unknown): Record<string, unknown>[] {
+  const data = getProperty(response, "data") ?? response
+  const candidates = [
+    data,
+    getProperty(data, "all"),
+    getProperty(data, "providers"),
+    getProperty(response, "providers"),
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter(isRecord)
+    }
+  }
+
+  return []
+}
+
+function extractModelEntries(models: unknown): Array<{ key?: string; value: unknown }> {
+  if (Array.isArray(models)) {
+    return models.map((value) => ({ value }))
+  }
+  if (isRecord(models)) {
+    return Object.entries(models).map(([key, value]) => ({ key, value }))
+  }
+  return []
+}
+
+function getProperty(value: unknown, key: string): unknown {
+  return isRecord(value) ? Reflect.get(value, key) : undefined
+}
+
+function getString(value: unknown, key: string): string | undefined {
+  const property = getProperty(value, key)
+  return typeof property === "string" ? property : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }
 
 export async function listAgents(client: OpencodeClient): Promise<AdapterAgent[]> {
