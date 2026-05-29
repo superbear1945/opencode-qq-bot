@@ -58,6 +58,14 @@ export class EventRouter {
   }
 
   private extractSessionId(event: Event): string | undefined {
+    // `message.part.delta` 不适合走下面旧分支的类型结构，但它仍然会在
+    // `properties` 里携带 `sessionID`。这里先特判提取，确保新版流式文本
+    // 事件也能被路由到正确的会话监听器。
+    const deltaSessionId = extractDeltaSessionId(event)
+    if (deltaSessionId) {
+      return deltaSessionId
+    }
+
     switch (event.type) {
       case "message.part.updated":
         return event.properties.part.sessionID
@@ -86,4 +94,16 @@ export class EventRouter {
   resetBackoff(): void {
     this.reconnectDelay = 1000
   }
+}
+
+function extractDeltaSessionId(event: Event): string | undefined {
+  // 这里故意使用基于运行时结构的判断，而不是依赖 SDK 当前的类型定义，
+  // 这样即使本地安装的 SDK 类型还没跟上运行时事件集合，也能正常工作。
+  const properties = (event as { properties?: unknown }).properties
+  if (typeof properties !== "object" || properties === null) {
+    return undefined
+  }
+
+  const sessionId = Reflect.get(properties, "sessionID")
+  return typeof sessionId === "string" ? sessionId : undefined
 }
